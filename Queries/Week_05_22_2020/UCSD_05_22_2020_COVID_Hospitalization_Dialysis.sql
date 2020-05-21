@@ -92,9 +92,14 @@ if object_id('tempdb.dbo.#covid_hsp') is  not null drop table #covid_hsp
 select distinct  cp.person_id, cp.cohort_start_date, cp.cohort_end_date
 , vo.visit_occurrence_id, vo.visit_start_datetime, vo.visit_end_datetime, vo.visit_concept_id
 , vo.discharge_to_concept_id, vo.discharge_to_source_value
+, d.death_datetime
+, case when d.death_date between vo.visit_start_datetime and vo.visit_end_datetime
+	or discharge_to_concept_id = 44814686 -- Deceased
+	then 1 else 0 end as [Hospital_mortality]
 into #covid_hsp
 from #covid_pos cp 
 join omop_v5.OMOP5.visit_occurrence vo on vo.person_id = cp.person_id
+left join OMOP_v5.OMOP5.death d on d.person_id = cp.person_id
 where vo.visit_concept_id in (9201, 262) -- IP, EI visits 
 and (datediff(dd, cp.cohort_start_date, vo.visit_start_datetime) between 0 and  14  -- +ve COVID status within 14 days before admission
 	or cp.cohort_start_date between vo.visit_start_datetime and vo.visit_end_datetime 
@@ -109,18 +114,19 @@ Query: (1A) What is the all-cause mortality of hospitalized, African-American pa
 
 --Hospitalizations with race
 if object_id('tempdb.dbo.#hsp_mortality') is  not null drop table #hsp_mortality
-select distinct p.person_id, p.race_concept_id, p.race_source_value, d.death_datetime, cp.cohort_start_date
+select distinct p.person_id, p.race_concept_id, p.race_source_value, cp.death_datetime, cp.cohort_start_date
 , cp.visit_occurrence_id 
 , cp.visit_start_datetime, cp.visit_end_datetime, cp.discharge_to_concept_id, cp.discharge_to_source_value 
-, case when d.death_date between cp.visit_start_datetime and cp.visit_end_datetime
-	or discharge_to_concept_id = 44814686 -- Deceased
-	then 1 else NULL end as [Hospital_mortality]
+, cp.Hospital_mortality
+--, case when d.death_date between cp.visit_start_datetime and cp.visit_end_datetime
+--	or discharge_to_concept_id = 44814686 -- Deceased
+--	then 1 else NULL end as [Hospital_mortality]
 , case when p.race_concept_id = 8516	--Black or African American
 	then 1 else NULL end as [African_American]
 into #hsp_mortality
 from #covid_hsp cp
 left join OMOP_v5.omop5.person p on p.person_id = cp.person_id
-left join OMOP_v5.OMOP5.death d on d.person_id = cp.person_id
+--left join OMOP_v5.OMOP5.death d on d.person_id = cp.person_id
 
 
 --Numerator: Total # African American who died during hospital stay
@@ -139,14 +145,16 @@ select count(distinct person_id) from #hsp_mortality where [Hospital_mortality] 
 *************************************************************************************************************/
 
 
-	--ICU admissions (COVID patients transferred to ICU at any point during hospital stay)
+	--ICU admissions (COVID patients transferred to ICU at any point during hospital stay) 
+	-- and not deceased at discharge
 	if object_id('tempdb.dbo.#ICU_transfers') is  not null drop table #ICU_transfers 
 	select distinct vd.visit_occurrence_id, visit_detail_id, vd.person_id, visit_detail_concept_id
 	, visit_detail_start_datetime, visit_detail_end_datetime
-	, vd.care_site_id, icu.care_site_name, cp.cohort_start_date
+	, vd.care_site_id, icu.care_site_name, cp.cohort_start_date	
+	, cp.[Hospital_mortality], cp.death_datetime
 	into #ICU_transfers
 	from #covid_hsp cp 
-	join omop5.visit_detail vd on  cp.visit_occurrence_id = vd.visit_occurrence_id
+	join omop5.visit_detail vd on  cp.visit_occurrence_id = vd.visit_occurrence_id --visit detail  holds the Admissions, discharges and transfers
 	join #icu_departments icu on icu.care_site_id = vd.care_site_id
 
 	
@@ -156,6 +164,7 @@ select count(distinct person_id) from #hsp_mortality where [Hospital_mortality] 
 --Readmissions (<=7 days) of patients w/ COVID who were not in the ICU
 if object_id('tempdb.dbo.#Readmissions') is  not null drop table #Readmissions 
 select distinct vo.visit_occurrence_id, vo.person_id, vo.visit_concept_id, vo.visit_start_datetime, vo.visit_end_datetime
+, vo.Hospital_mortality
 , readm.visit_occurrence_id readm_visit_occurrence_id, readm.visit_concept_id Readm_visit_concept_id
 , readm.visit_start_datetime readm_visit_start_datetime, readm.visit_end_datetime readm_visit_end_datetime
 into #Readmissions
@@ -165,7 +174,9 @@ left join OMOP5.visit_occurrence readm on readm.person_id = vo.person_id
 	and readm.visit_concept_id in (9201, 262, 9203) -- IP, EI, ED visits 
 	and datediff(dd, vo.visit_end_datetime, readm.visit_start_datetime) between 0 and 7 --readmission within 7 days of discharge
 	and readm.visit_occurrence_id != vo.visit_occurrence_id
+	and readm.visit_start_datetime >= vo.visit_end_datetime
 where  icu.visit_occurrence_id is null -- not transferred to the ICU
+and vo.Hospital_mortality != 1 --discharged alive
 
 
 
@@ -176,6 +187,7 @@ select count(distinct person_id) from #Readmissions
 select count(distinct person_id) from #Readmissions
 where readm_visit_occurrence_id is not null 
 
+select * from #Readmissions
 
 /**************************************************************************************************************
 (1C) For hospitalzed COVID patients who were not dialysis dependent prior to hospitalization,
