@@ -27,8 +27,7 @@ Query: (1A) What is the all-cause mortality of hospitalized, African-American pa
 
 
 	--write code identifying COVID patients with + lab tests
-
-
+	
 
 	--ICU departments 
 	if object_id('tempdb.dbo.#icu_departments') is  not null drop table #icu_departments 
@@ -71,9 +70,14 @@ union
 	, 1314324	, 4032243	, 762572	, 4120120	, 2002282	, 40313125
 	, 40313128	, 40348035	, 40350725	, 40513647	, 45889034	, 45889365
 ) and c2.concept_id is not null 
+union
+	-- VA codes
+	select distinct c2.concept_id, c2.concept_name, c2.domain_id, c2.vocabulary_id, c2.concept_class_id, c2.standard_concept, c2.concept_code 
+	from OMOP_Vocabulary.vocab_51.concept c2 
+	where concept_id in (
+	4126124,	4092504,	4323627,	4021976,	435649,	4080169,	4050867,	4051328,	4031315,	4050866,	4050863,	4049846,	4051329,	40480136,	4181476,	1314324,	44786469,	46270934,	46270933,	4139443,	2617551,	2617550,	2617552,	4140589,	4049845,	4120120,	2101833,	2213573,	2213572,	40664693,	40664745,	2108567,	2108564,	2108566,	4195714,	4146649,	4286500,	4137616,	313232,	4300099,	4297919,	4297658,	2721479,	2721482,	2514586,	46270524,	764695,	4238836,	4052538,	4051326,	4050862,	4051327,	4080171,	46270932,	46273700,	4099603,	44782924,	4030834,	44786470,	44786471,	43533281,	2108568,	42897969,	2003564,	4324124,	4247794,	4032775,	4195534,	2101834,	4300106,	4020892,	4002872,	44783963,	4080172)
 
 select * from #dialysis
-
 
 
 
@@ -92,8 +96,8 @@ into #covid_hsp
 from #covid_pos cp 
 join omop_v5.OMOP5.visit_occurrence vo on vo.person_id = cp.person_id
 where vo.visit_concept_id in (9201, 262) -- IP, EI visits 
-and (datediff(dd, cp.cohort_start_date, vo.visit_start_datetime) between 0 and  14
-	or cp.cohort_start_date between vo.visit_start_datetime and vo.visit_end_datetime
+and (datediff(dd, cp.cohort_start_date, vo.visit_start_datetime) between 0 and  14  -- +ve COVID status within 14 days before admission
+	or cp.cohort_start_date between vo.visit_start_datetime and vo.visit_end_datetime 
 	)
 
 
@@ -117,20 +121,12 @@ into #hsp_mortality
 from #covid_hsp cp
 left join OMOP_v5.omop5.person p on p.person_id = cp.person_id
 left join OMOP_v5.OMOP5.death d on d.person_id = cp.person_id
---#covid_pos cp
---join omop_v5.OMOP5.visit_occurrence vo on vo.person_id = cp.person_id
---left join OMOP_v5.omop5.person p on p.person_id = vo.person_id
---left join OMOP_v5.OMOP5.death d on d.person_id = vo.person_id
---where vo.visit_concept_id in (9201, 262) -- IP, EI, ED visits 
-----and vo.visit_start_date >= '2020-01-01'
---and (datediff(dd, cp.cohort_start_date, vo.visit_start_datetime) between 0 and  14
---	or cp.cohort_start_date between vo.visit_start_datetime and vo.visit_end_datetime
---	)
 
---Numerator
+
+--Numerator: Total # African American who died during hospital stay
 select count(distinct person_id) from #hsp_mortality where [Hospital_mortality] = 1 and African_American = 1
 
---Denominator
+--Denominator: Total # patients who died during hospital stay
 select count(distinct person_id) from #hsp_mortality where [Hospital_mortality] = 1 
 
 
@@ -143,7 +139,7 @@ select count(distinct person_id) from #hsp_mortality where [Hospital_mortality] 
 *************************************************************************************************************/
 
 
-	--ICU admissions of COVID patients 
+	--ICU admissions (COVID patients transferred to ICU at any point during hospital stay)
 	if object_id('tempdb.dbo.#ICU_transfers') is  not null drop table #ICU_transfers 
 	select distinct vd.visit_occurrence_id, visit_detail_id, vd.person_id, visit_detail_concept_id
 	, visit_detail_start_datetime, visit_detail_end_datetime
@@ -152,19 +148,12 @@ select count(distinct person_id) from #hsp_mortality where [Hospital_mortality] 
 	from #covid_hsp cp 
 	join omop5.visit_detail vd on  cp.visit_occurrence_id = vd.visit_occurrence_id
 	join #icu_departments icu on icu.care_site_id = vd.care_site_id
-	--#covid_pos cp 
-	--join OMOP5.visit_occurrence vo on vo.person_id = cp.person_id
-	--join omop5.visit_detail vd on  vo.visit_occurrence_id = vd.visit_occurrence_id
-	--join #icu_departments icu on icu.care_site_id = vd.care_site_id
-	--where vo.visit_concept_id in (9201, 262) -- IP, EI visits 
-	--and (datediff(dd, cp.cohort_start_date, vo.visit_start_datetime) between 0 and  14
-	--or cp.cohort_start_date between vo.visit_start_datetime and vo.visit_end_datetime
-	--)
+
 	
 	select * from #ICU_transfers
 
 
---COVID hsp patients not in ICU
+--Readmissions (<=7 days) of patients w/ COVID who were not in the ICU
 if object_id('tempdb.dbo.#Readmissions') is  not null drop table #Readmissions 
 select distinct vo.visit_occurrence_id, vo.person_id, vo.visit_concept_id, vo.visit_start_datetime, vo.visit_end_datetime
 , readm.visit_occurrence_id readm_visit_occurrence_id, readm.visit_concept_id Readm_visit_concept_id
@@ -178,34 +167,15 @@ left join OMOP5.visit_occurrence readm on readm.person_id = vo.person_id
 	and readm.visit_occurrence_id != vo.visit_occurrence_id
 where  icu.visit_occurrence_id is null -- not transferred to the ICU
 
---#covid_pos cp 
---join OMOP5.visit_occurrence vo on vo.person_id = cp.person_id
---left join #ICU_transfers icu on icu.visit_occurrence_id = vo.visit_occurrence_id
---left join OMOP5.visit_occurrence readm on readm.person_id = cp.person_id and readm.visit_concept_id in (9201, 262, 9203) -- IP, EI, ED visits 
---	and datediff(dd, vo.visit_end_datetime, readm.visit_start_datetime) between 0 and 7 --readmission within 7 days of discharge
---	and readm.visit_occurrence_id != vo.visit_occurrence_id
---where vo.visit_concept_id in (9201, 262, 9203) -- IP, EI, ed visits 
---and icu.visit_occurrence_id is null -- not transferred to the ICU
-----and vo.visit_start_date >= '2020-01-01'
-----	and datediff(dd, cp.cohort_start_date, vo.visit_start_datetime) <=14 
---and (datediff(dd, cp.cohort_start_date, vo.visit_start_datetime) between 0 and  14
---	or cp.cohort_start_date between vo.visit_start_datetime and vo.visit_end_datetime
---	)
 
 
 --COVID hosp pats w/o ICU transfer
 select count(distinct person_id) from #Readmissions 
 
- --COVID hosp pats w/o ICU transfer & w/ readm
+ --COVID hosp pats w/o ICU transfer & w/ 7-day readm
 select count(distinct person_id) from #Readmissions
 where readm_visit_occurrence_id is not null 
 
-
-/* data with ED visits included in the original visit
-select * into #readm1 from #Readmissions
-denom: 108
-num: 8
-*/
 
 /**************************************************************************************************************
 (1C) For hospitalzed COVID patients who were not dialysis dependent prior to hospitalization,
@@ -215,6 +185,7 @@ num: 8
 
 -- COVID patients with dialysis at any time
 if object_id('tempdb.dbo.#dialysis_covid_pats') is  not null drop table #dialysis_covid_pats 
+--procedure records
 select distinct cp.person_id, cp.cohort_start_date, cp.cohort_end_date
 , po.procedure_concept_id, po.procedure_datetime, po.procedure_source_value, po.visit_occurrence_id
 , d.*
@@ -224,12 +195,39 @@ join OMOP_v5.OMOP5.procedure_occurrence po on cp.person_id = po.person_id
 join #dialysis d on d.concept_id = po.procedure_concept_id and d.domain_id = 'Procedure'
 
 union 
+
+--Observation records
 select distinct cp.person_id, cp.cohort_start_date, cp.cohort_end_date
 , po.observation_concept_id, po.observation_datetime, po.observation_source_value, po.visit_occurrence_id
 , d.*
 from #covid_pos cp 
 join OMOP_v5.OMOP5.observation po on cp.person_id = po.person_id
 join #dialysis d on d.concept_id = po.observation_concept_id and d.domain_id = 'observation'
+
+union
+
+--condition records
+select distinct cp.person_id, cp.cohort_start_date, cp.cohort_end_date
+, po.condition_concept_id, po.condition_start_datetime, po.condition_source_value, po.visit_occurrence_id
+, d.*
+from #covid_pos cp 
+join OMOP_v5.OMOP5.condition_occurrence po on cp.person_id = po.person_id
+join #dialysis d on d.concept_id = po.condition_concept_id and d.domain_id = 'Condition'
+
+union 
+
+--Measurement records
+select distinct cp.person_id, cp.cohort_start_date, cp.cohort_end_date
+, po.measurement_concept_id, po.measurement_datetime, po.measurement_source_value, po.visit_occurrence_id
+, d.*
+from #covid_pos cp 
+join OMOP_v5.OMOP5.measurement po on cp.person_id = po.person_id
+join #dialysis d on d.concept_id = po.measurement_concept_id and d.domain_id = 'Measurement'
+
+
+
+
+
 
 select * from #dialysis_covid_pats 
 
@@ -238,25 +236,21 @@ select * from #dialysis_covid_pats
 --COVID pats w/ no prior dialysis requiring inpatient dialysis
 if object_id('tempdb.dbo.#IP_dialysis') is  not null drop table #IP_dialysis 
 select distinct  cp.person_id, cp.cohort_start_date, cp.cohort_end_date
-, vo.visit_occurrence_id, vo.visit_start_datetime, vo.visit_end_datetime, vo.visit_concept_id
+, cp.visit_occurrence_id, cp.visit_start_datetime, cp.visit_end_datetime, cp.visit_concept_id
 , ipd.procedure_datetime, ipd.procedure_source_value 
 into #IP_dialysis
-from #covid_pos cp 
-join omop_v5.OMOP5.visit_occurrence vo on vo.person_id = cp.person_id
-left join #dialysis_covid_pats d on d.person_id = cp.person_id and d.procedure_datetime < vo.visit_start_datetime 
-left join #dialysis_covid_pats ipd on ipd.visit_occurrence_id = vo.visit_occurrence_id -- IP dialysis
-
-where vo.visit_concept_id in (9201, 262) -- IP, EI visits 
---and ipd.visit_occurrence_id is not null --dialysis during hospitalizations
-----and vo.visit_start_date >= '2020-01-01'
-and d.person_id is null  -- no prior dialysis
-and (datediff(dd, cp.cohort_start_date, vo.visit_start_datetime) between 0 and  14
-	or cp.cohort_start_date between vo.visit_start_datetime and vo.visit_end_datetime
-	)
+from #covid_hsp cp
+join #dialysis_covid_pats ipd on ipd.visit_occurrence_id = cp.visit_occurrence_id -- IP dialysis
+left join #dialysis_covid_pats d on d.person_id = cp.person_id and d.procedure_datetime < cp.visit_start_datetime 
+where d.person_id is null  -- no prior dialysis
 
 select * from #IP_dialysis
 
 select count(distinct person_id) from #IP_dialysis
+
+
+
+
 
 ----------
 --- Rough work 
@@ -274,6 +268,20 @@ and (datediff(dd, cp.cohort_start_date, vo.visit_start_datetime) between 0 and  
 
 select max(cohort_start_date),  min(cohort_start_date) from #covid_pos
 
+
+
+--COVID pats w/ no prior dialysis requiring inpatient dialysis
+if object_id('tempdb.dbo.#IP_dialysis1') is  not null drop table #IP_dialysis1 
+select distinct  cp.person_id, cp.cohort_start_date, cp.cohort_end_date
+, cp.visit_occurrence_id, cp.visit_start_datetime, cp.visit_end_datetime, cp.visit_concept_id
+, ipd.procedure_datetime, ipd.procedure_source_value 
+into #IP_dialysis1
+from #covid_hsp cp
+left join #dialysis_covid_pats ipd on ipd.visit_occurrence_id = cp.visit_occurrence_id -- IP dialysis
+left join #dialysis_covid_pats d on d.person_id = cp.person_id and d.procedure_datetime < cp.visit_start_datetime 
+where d.person_id is null  -- no prior dialysis
+
+select count(distinct person_id) from #IP_dialysis1
 
 
 --COVID pats w/ no prior dialysis 
