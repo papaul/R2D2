@@ -180,14 +180,24 @@ and vo.Hospital_mortality != 1 --discharged alive
 
 
 
---COVID hosp pats w/o ICU transfer
-select count(distinct person_id) from #Readmissions 
-
- --COVID hosp pats w/o ICU transfer & w/ 7-day readm
+ --COVID hosp pats discharged alive w/o ICU transfer & w/ 7-day readm
 select count(distinct person_id) from #Readmissions
 where readm_visit_occurrence_id is not null 
 
-select * from #Readmissions
+
+
+--COVID hosp pats discharged alive w/o ICU transfer and no readmissions <=7days
+select count(distinct person_id) from #Readmissions 
+where readm_visit_occurrence_id is  null 
+and person_id not  in (select distinct person_id from #Readmissions
+		where readm_visit_occurrence_id is not null )
+
+--Total #COVID hsp pats discharged alive w/o ICU transfer
+select count(distinct person_id) from #Readmissions
+
+
+
+select * from #Readmissions order by person_id
 
 /**************************************************************************************************************
 (1C) For hospitalzed COVID patients who were not dialysis dependent prior to hospitalization,
